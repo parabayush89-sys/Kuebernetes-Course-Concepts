@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="day">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Field Notes — Kubernetes ReplicaSets Deep-Dive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Architects+Daughter&family=Caveat:wght@600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Day Mode — Spiral Field Notebook Aesthetic */
+      --outer-desk: #e5e0d5;
+      --spiral-rail: #d2cdc1;
+      --spiral-hole: #6e6a63;
+      --spiral-wire-light: #f8fafc;
+      --spiral-wire-dark: #78756e;
+      --sidebar-bg: #f6f2e6;
+      --sidebar-border: #dfd9c8;
+      --sidebar-active-bg: #f8edc6;
+      --sidebar-active-border: #d9a01b;
+      --paper-bg: #fcfaf4;
+      --paper-rule: rgba(160, 178, 198, 0.25);
+      --margin-rule: rgba(214, 114, 114, 0.34);
+      --banner-bg: #f7f1d8;
+      --banner-top-bar: #d49b1a;
+      --banner-watermark: rgba(190, 180, 145, 0.26);
+      --ink-heading: #194d57;
+      --ink-body: #2c353d;
+      --ink-muted: #66707a;
+      --ink-accent: #c48812;
+      --ink-teal: #176b78;
+      --ink-rose: #b83b48;
+      --card-bg: #ffffff;
+      --card-border: #e3ded1;
+      --pill-bg: #ffffff;
+      --pill-border: #ded8c8;
+      --code-bg: #1c242b;
+      --code-text: #e6edf3;
+      --code-header: #26313a;
+      --diagram-bg: #ffffff;
+      --diagram-stroke: #194d57;
+      --diagram-sub: #546470;
+      --diag-fill-1: #eef6f8;
+      --diag-stroke-1: #194d57;
+      --diag-fill-2: #fdf6de;
+      --diag-stroke-2: #d49b1a;
+      --diag-fill-3: #eef7f0;
+      --diag-stroke-3: #2a7b4f;
+      --diag-fill-4: #fdf0f1;
+      --diag-stroke-4: #b83b48;
+      --highlight-mark: rgba(247, 214, 116, 0.52);
+      --shadow-book: 0 18px 45px rgba(38, 34, 26, 0.16);
+    }
+
+    [data-theme="night"] {
+      /* Night Mode — Midnight Drafting Notebook */
+      --outer-desk: #090d12;
+      --spiral-rail: #10161f;
+      --spiral-hole: #05070a;
+      --spiral-wire-light: #64748b;
+      --spiral-wire-dark: #1e293b;
+      --sidebar-bg: #121922;
+      --sidebar-border: #222e3d;
+      --sidebar-active-bg: #272214;
+      --sidebar-active-border: #eab308;
+      --paper-bg: #151d28;
+      --paper-rule: rgba(100, 140, 180, 0.12);
+      --margin-rule: rgba(235, 110, 120, 0.24);
+      --banner-bg: #1d242b;
+      --banner-top-bar: #eab308;
+      --banner-watermark: rgba(234, 179, 8, 0.08);
+      --ink-heading: #5ec2d1;
+      --ink-body: #dce4ec;
+      --ink-muted: #8b99a8;
+      --ink-accent: #f2be38;
+      --ink-teal: #4fd1c5;
+      --ink-rose: #fb7185;
+      --card-bg: #1a2330;
+      --card-border: #283546;
+      --pill-bg: #1e2938;
+      --pill-border: #314054;
+      --code-bg: #0c1117;
+      --code-text: #e6edf3;
+      --code-header: #161f2b;
+      --diagram-bg: #111822;
+      --diagram-stroke: #7dd3fc;
+      --diagram-sub: #94a3b8;
+      --diag-fill-1: rgba(94, 194, 209, 0.14);
+      --diag-stroke-1: #5ec2d1;
+      --diag-fill-2: rgba(242, 190, 56, 0.14);
+      --diag-stroke-2: #f2be38;
+      --diag-fill-3: rgba(74, 222, 128, 0.14);
+      --diag-stroke-3: #4ade80;
+      --diag-fill-4: rgba(251, 113, 133, 0.14);
+      --diag-stroke-4: #fb7185;
+      --highlight-mark: rgba(234, 179, 8, 0.22);
+      --shadow-book: 0 20px 50px rgba(0, 0, 0, 0.65);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--outer-desk);
+      color: var(--ink-body);
+      font-family: 'Lora', Georgia, serif;
+      line-height: 1.72;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    /* Full Notebook Spread Wrapper */
+    .notebook-spread {
+      max-width: 1380px;
+      margin: 0 auto;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 36px 265px 1fr;
+      box-shadow: var(--shadow-book);
+      background: var(--paper-bg);
+    }
+
+    /* 1. Left Spiral Coil Binding */
+    .spiral-gutter {
+      background: var(--spiral-rail);
+      border-right: 1px solid var(--sidebar-border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-evenly;
+      align-items: center;
+      padding: 12px 0;
+      z-index: 30;
+      overflow: hidden;
+    }
+
+    .coil-unit {
+      position: relative;
+      width: 34px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .coil-hole {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--spiral-hole);
+      position: absolute;
+      right: 5px;
+      box-shadow: inset 1px 1px 2px rgba(0,0,0,0.6);
+    }
+
+    .coil-ring {
+      width: 30px;
+      height: 7px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, var(--spiral-wire-light) 0%, var(--spiral-wire-dark) 100%);
+      box-shadow: 0 2px 3px rgba(0,0,0,0.35);
+      transform: rotate(-8deg);
+      position: relative;
+      z-index: 2;
+    }
+
+    /* 2. Left Index Sidebar */
+    .sidebar {
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--sidebar-border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 1.5rem 1.15rem 2rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.1rem;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    .sidebar::-webkit-scrollbar {
+      width: 6px;
+    }
+    .sidebar::-webkit-scrollbar-thumb {
+      background: var(--sidebar-border);
+      border-radius: 3px;
+    }
+
+    .sidebar-brand-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--ink-heading);
+      text-transform: uppercase;
+    }
+
+    .sidebar-brand-sub {
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.09em;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      margin-top: 0.2rem;
+    }
+
+    .author-box {
+      background: var(--banner-bg);
+      border: 1px solid var(--sidebar-border);
+      border-left: 3px solid var(--banner-top-bar);
+      border-radius: 4px;
+      padding: 0.72rem 0.85rem;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: var(--ink-body);
+    }
+
+    .author-box .label {
+      color: var(--ink-muted);
+      font-size: 0.72rem;
+    }
+
+    .author-box .name {
+      font-weight: 600;
+      color: var(--ink-body);
+    }
+
+    .author-box .tag-line {
+      color: var(--ink-teal);
+      font-size: 0.73rem;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    /* Day / Night Switch inside Sidebar */
+    .mode-switch-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      border: 1px solid var(--sidebar-border);
+      background: var(--card-bg);
+      color: var(--ink-heading);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .mode-switch-btn:hover {
+      border-color: var(--ink-accent);
+      background: var(--sidebar-active-bg);
+    }
+
+    .index-heading {
+      font-size: 0.67rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      margin-top: 0.2rem;
+    }
+
+    .index-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.18rem;
+    }
+
+    .index-list a {
+      display: block;
+      text-decoration: none;
+      font-size: 0.82rem;
+      color: var(--ink-body);
+      padding: 0.44rem 0.65rem;
+      border-radius: 4px;
+      border-left: 3px solid transparent;
+      transition: all 0.15s ease;
+      font-weight: 500;
+    }
+
+    .index-list a:hover,
+    .index-list a.active {
+      background: var(--sidebar-active-bg);
+      border-left-color: var(--sidebar-active-border);
+      color: var(--ink-heading);
+      font-weight: 700;
+    }
+
+    .quick-tip-box {
+      margin-top: auto;
+      padding-top: 0.85rem;
+      border-top: 1px dashed var(--sidebar-border);
+      font-size: 0.75rem;
+      color: var(--ink-muted);
+      line-height: 1.5;
+    }
+
+    .quick-tip-box strong {
+      display: block;
+      font-size: 0.66rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--ink-accent);
+      margin-bottom: 0.25rem;
+    }
+
+    /* 3. Right Ruled Notebook Page */
+    .notebook-page {
+      background-color: var(--paper-bg);
+      background-image:
+        linear-gradient(90deg, transparent 42px, var(--margin-rule) 42px, var(--margin-rule) 43.5px, transparent 43.5px),
+        repeating-linear-gradient(transparent, transparent 31px, var(--paper-rule) 31px, var(--paper-rule) 32px);
+      padding: 2.2rem 3.2rem 4.5rem 4.4rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Top Sticky Note Banner */
+    .hero-banner {
+      background: var(--banner-bg);
+      border-top: 4px solid var(--banner-top-bar);
+      border-radius: 3px;
+      padding: 1.85rem 2.2rem 1.75rem 2.2rem;
+      margin-bottom: 2.4rem;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.04);
+    }
+
+    .hero-watermark {
+      position: absolute;
+      right: 26px;
+      bottom: 8px;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 5.2rem;
+      font-weight: 800;
+      color: var(--banner-watermark);
+      transform: rotate(-7deg);
+      pointer-events: none;
+      user-select: none;
+      letter-spacing: -0.03em;
+    }
+
+    .hero-kicker {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: var(--ink-accent);
+      margin-bottom: 0.55rem;
+    }
+
+    .hero-title {
+      font-family: 'Architects Daughter', 'Caveat', cursive;
+      font-size: 2.65rem;
+      font-weight: 400;
+      color: var(--ink-heading);
+      line-height: 1.15;
+      margin-bottom: 0.65rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-desc {
+      font-family: 'Lora', serif;
+      font-size: 0.98rem;
+      color: var(--ink-body);
+      max-width: 650px;
+      margin-bottom: 1.25rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-pill {
+      background: var(--pill-bg);
+      border: 1px solid var(--pill-border);
+      border-radius: 4px;
+      padding: 0.28rem 0.72rem;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.74rem;
+      font-weight: 500;
+      color: var(--ink-body);
+      text-decoration: none;
+    }
+
+    /* Section Headings with Handwritten Pen Slash */
+    .section-block {
+      margin-bottom: 2.8rem;
+      scroll-margin-top: 1.5rem;
+    }
+
+    .hand-heading {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-family: 'Architects Daughter', 'Caveat', cursive;
+      font-size: 1.55rem;
+      color: var(--ink-heading);
+      margin-bottom: 0.85rem;
+      font-weight: 400;
+    }
+
+    .pen-slash {
+      display: inline-block;
+      width: 11px;
+      height: 4px;
+      background: var(--banner-top-bar);
+      border-radius: 2px;
+      transform: rotate(38deg);
+      flex-shrink: 0;
+    }
+
+    .section-lead {
+      font-size: 0.97rem;
+      color: var(--ink-body);
+      margin-bottom: 1.1rem;
+    }
+
+    /* 4-Column Overview Index Grid */
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.85rem;
+      margin-top: 1rem;
+    }
+
+    .index-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 0.85rem 0.95rem;
+      text-decoration: none;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+      display: block;
+    }
+
+    .index-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--banner-top-bar);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+    }
+
+    .index-card-title {
+      font-family: 'Architects Daughter', 'Caveat', cursive;
+      font-size: 1.02rem;
+      color: var(--ink-heading);
+      margin-bottom: 0.3rem;
+    }
+
+    .index-card-desc {
+      font-family: 'Lora', serif;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: var(--ink-muted);
+    }
+
+    /* Content Cards & Lists */
+    .note-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 5px;
+      padding: 1.25rem 1.45rem;
+      margin-bottom: 1.15rem;
+    }
+
+    .note-card.accent-left {
+      border-left: 3.5px solid var(--banner-top-bar);
+      background: var(--banner-bg);
+    }
+
+    .note-card h3 {
+      font-family: 'Architects Daughter', 'Caveat', cursive;
+      font-size: 1.22rem;
+      color: var(--ink-heading);
+      margin-bottom: 0.5rem;
+      font-weight: 400;
+    }
+
+    p {
+      margin-bottom: 0.85rem;
+      font-size: 0.96rem;
+    }
+
+    ul, ol {
+      margin-left: 1.35rem;
+      margin-bottom: 0.9rem;
+    }
+
+    li {
+      margin-bottom: 0.52rem;
+      font-size: 0.95rem;
+    }
+
+    li strong {
+      color: var(--ink-heading);
+    }
+
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.83em;
+      background: var(--highlight-mark);
+      padding: 0.1rem 0.35rem;
+      border-radius: 3px;
+      color: var(--ink-body);
+    }
+
+    /* Diagram Frames */
+    .diagram-frame {
+      background: var(--diagram-bg);
+      border: 1px solid var(--card-border);
+      border-top: 3px solid var(--ink-heading);
+      border-radius: 5px;
+      padding: 1rem 1.1rem;
+      margin: 1.25rem 0;
+      overflow-x: auto;
+    }
+
+    .diagram-label {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      margin-bottom: 0.65rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .diagram-label span.hand-tag {
+      font-family: 'Architects Daughter', cursive;
+      font-size: 0.92rem;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--ink-accent);
+      font-weight: 400;
+    }
+
+    svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .svg-hand {
+      font-family: 'Architects Daughter', 'Caveat', cursive;
+    }
+
+    .svg-sans {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    .svg-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* 2-Column Grid */
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 0.95rem;
+      margin-bottom: 1rem;
+    }
+
+    /* Command Code Blocks */
+    .cmd-box {
+      background: var(--code-bg);
+      color: var(--code-text);
+      border-radius: 5px;
+      overflow: hidden;
+      margin: 0.75rem 0;
+      border: 1px solid var(--card-border);
+    }
+
+    .cmd-bar {
+      background: var(--code-header);
+      padding: 0.38rem 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.72rem;
+      color: #9fb0c0;
+    }
+
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #e6edf3;
+      border-radius: 3px;
+      padding: 0.12rem 0.5rem;
+      font-size: 0.7rem;
+      cursor: pointer;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    .copy-btn:hover {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    pre {
+      padding: 0.85rem 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+
+    /* Misconceptions Cards */
+    .myth-row {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 0.85rem 1.05rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .tag-myth, .tag-fact {
+      display: inline-block;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.67rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      padding: 0.12rem 0.45rem;
+      border-radius: 3px;
+      margin-right: 0.45rem;
+      text-transform: uppercase;
+    }
+
+    .tag-myth {
+      background: var(--diag-fill-4);
+      color: var(--ink-rose);
+      border: 1px solid var(--ink-rose);
+    }
+
+    .tag-fact {
+      background: var(--diag-fill-3);
+      color: var(--ink-teal);
+      border: 1px solid var(--ink-teal);
+    }
+
+    /* Interactive Practice Questions */
+    .practice-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-left: 3px solid var(--ink-heading);
+      border-radius: 4px;
+      padding: 1rem 1.2rem;
+      margin-bottom: 0.95rem;
+    }
+
+    .practice-q {
+      font-weight: 600;
+      font-size: 0.94rem;
+      margin-bottom: 0.55rem;
+      color: var(--ink-body);
+    }
+
+    .practice-level {
+      font-family: 'Architects Daughter', cursive;
+      color: var(--ink-heading);
+      font-size: 1.05rem;
+      margin-right: 0.3rem;
+    }
+
+    .practice-textarea {
+      width: 100%;
+      min-height: 64px;
+      background: var(--paper-bg);
+      color: var(--ink-body);
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 0.55rem 0.75rem;
+      font-family: 'Lora', serif;
+      font-size: 0.9rem;
+      resize: vertical;
+      margin-bottom: 0.5rem;
+    }
+
+    .reveal-btn {
+      background: var(--banner-bg);
+      border: 1px solid var(--banner-top-bar);
+      color: var(--ink-heading);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.28rem 0.7rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .reveal-answer {
+      display: none;
+      margin-top: 0.6rem;
+      padding: 0.65rem 0.85rem;
+      background: var(--diag-fill-1);
+      border-left: 3px solid var(--ink-heading);
+      border-radius: 3px;
+      font-size: 0.89rem;
+    }
+
+    .reveal-answer.show {
+      display: block;
+    }
+
+    /* Responsive Adjustments */
+    @media (max-width: 1040px) {
+      .overview-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 820px) {
+      .notebook-spread {
+        grid-template-columns: 1fr;
+      }
+      .spiral-gutter {
+        display: none;
+      }
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--sidebar-border);
+      }
+      .index-list {
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+      .notebook-page {
+        padding: 1.6rem 1.3rem 3rem 1.8rem;
+        background-image:
+          linear-gradient(90deg, transparent 18px, var(--margin-rule) 18px, var(--margin-rule) 19px, transparent 19px),
+          repeating-linear-gradient(transparent, transparent 31px, var(--paper-rule) 31px, var(--paper-rule) 32px);
+      }
+      .overview-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="notebook-spread">
+    <!-- Left Spiral Coil Binding -->
+    <aside class="spiral-gutter" aria-hidden="true" id="spiralGutter"></aside>
+
+    <!-- Left Cream Index Sidebar -->
+    <nav class="sidebar" aria-label="Notebook index">
+      <div>
+        <div class="sidebar-brand-title">FIELD NOTES</div>
+        <div class="sidebar-brand-sub">KUBERNETES • CONTROLLERS • RS</div>
+      </div>
+
+      <div class="author-box">
+        <div class="label">Study Notebook</div>
+        <div class="name">Kubernetes ReplicaSets</div>
+        <div class="tag-line">Self-Healing &amp; Reconciliation Loops</div>
+      </div>
+
+      <button id="themeToggle" class="mode-switch-btn" type="button" aria-label="Toggle Day and Night mode">
+        <span id="modeText">☀️ Day Notebook</span>
+        <span id="modeAction">Switch to Night →</span>
+      </button>
+
+      <div class="index-heading">NOTEBOOK INDEX</div>
+      <ul class="index-list" id="indexNav">
+        <li><a href="#overview" class="active">Overview</a></li>
+        <li><a href="#sec1">1. Simple Explanation</a></li>
+        <li><a href="#sec2">2. Deep Technical</a></li>
+        <li><a href="#sec3">3. Control Loop Internals</a></li>
+        <li><a href="#sec4">4. Architecture &amp; Flow</a></li>
+        <li><a href="#sec5">5. Production Examples</a></li>
+        <li><a href="#sec6">6. Command Examples</a></li>
+        <li><a href="#sec7">7. Debugging Scenarios</a></li>
+        <li><a href="#sec8">8. Interview Focus</a></li>
+        <li><a href="#sec9">9. Misconceptions</a></li>
+        <li><a href="#sec10">10. Advanced Concepts</a></li>
+        <li><a href="#sec11">Your Turn: Check</a></li>
+      </ul>
+
+      <div class="quick-tip-box">
+        <strong>QUICK TIP</strong>
+        Never create standalone ReplicaSets directly in production—use a <code>Deployment</code>, which creates and orchestrates ReplicaSets for zero-downtime rolling updates and rollbacks.
+      </div>
+    </nav>
+
+    <!-- Main Ruled Notebook Sheet -->
+    <main class="notebook-page">
+      <!-- Top Sticky-Note Banner -->
+      <header class="hero-banner" id="overview">
+        <div class="hero-watermark" aria-hidden="true">RS</div>
+        <div class="hero-kicker">PRACTICAL NOTEBOOK • KUBERNETES CONTROL PLANE</div>
+        <h1 class="hero-title">Kubernetes ReplicaSets Deep-Dive</h1>
+        <p class="hero-desc">
+          A structured field guide to how Kubernetes guarantees Pod availability—from the restaurant shift-manager analogy down to informer caches, label selectors, <code>ownerReferences</code>, and Deployment rollout mechanics.
+        </p>
+        <div class="hero-pills">
+          <a href="#sec1" class="hero-pill">Beginner friendly</a>
+          <a href="#sec3" class="hero-pill">Reconciliation loop</a>
+          <a href="#sec6" class="hero-pill">kubectl reference</a>
+          <a href="#sec11" class="hero-pill">Interview check</a>
+        </div>
+      </header>
+
+      <!-- Notebook Index & Overview Grid -->
+      <section class="section-block">
+        <h2 class="hand-heading"><span class="pen-slash"></span> Notebook index &amp; overview</h2>
+        <p class="section-lead">
+          In these notes, we examine how a ReplicaSet continuously reconciles desired Pod count against actual cluster state, how it adopts or orphan-releases Pods via labels, and how Deployments wrap ReplicaSets for rollouts.
+        </p>
+
+        <div class="overview-grid">
+          <a href="#sec1" class="index-card">
+            <div class="index-card-title">01 • Simple Explanation</div>
+            <div class="index-card-desc">Restaurant shift manager keeping N cashiers staffed</div>
+          </a>
+          <a href="#sec2" class="index-card">
+            <div class="index-card-title">02 • Deep Technical</div>
+            <div class="index-card-desc">spec.replicas, matchLabels/Expressions &amp; template</div>
+          </a>
+          <a href="#sec3" class="index-card">
+            <div class="index-card-title">03 • Control Loop</div>
+            <div class="index-card-desc">Informers, workqueue, ownerReferences &amp; expectations</div>
+          </a>
+          <a href="#sec4" class="index-card">
+            <div class="index-card-title">04 • Lifecycle Flow</div>
+            <div class="index-card-desc">Node crash → Pod deletion → RS creates replacement</div>
+          </a>
+          <a href="#sec5" class="index-card">
+            <div class="index-card-title">05 • Prod Patterns</div>
+            <div class="index-card-desc">Deployment rollouts, HPA scaling &amp; Pod adoption</div>
+          </a>
+          <a href="#sec6" class="index-card">
+            <div class="index-card-title">06 • CLI Commands</div>
+            <div class="index-card-desc">kubectl get rs, scale &amp; orphan deletion (--cascade)</div>
+          </a>
+          <a href="#sec7" class="index-card">
+            <div class="index-card-title">07 • Debugging</div>
+            <div class="index-card-desc">0/3 Ready, selector collisions &amp; quota blocks</div>
+          </a>
+          <a href="#sec8" class="index-card">
+            <div class="index-card-title">08–10 • Mastery</div>
+            <div class="index-card-desc">RS vs Deployment, pod-template-hash &amp; PDBs</div>
+          </a>
+        </div>
+      </section>
+
+      <!-- SECTION 1 -->
+      <section class="section-block" id="sec1">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 1. Simple Explanation</h2>
+        <div class="note-card accent-left">
+          <h3>The Restaurant Shift-Manager Analogy</h3>
+          <p>
+            Remember how a single <strong>Pod</strong> is mortal—if its worker node crashes, Kubernetes does not resurrect that dead Pod. A <strong>ReplicaSet</strong> is like a <strong>restaurant shift manager</strong> whose sole job is keeping a target headcount on the floor:
+          </p>
+          <ul>
+            <li><strong>Desired headcount (<code>spec.replicas: 3</code>):</strong> The manager has a clipboard saying "We must always have 3 cashiers wearing a <code>role=cashier</code> name badge."</li>
+            <li><strong>If a cashier goes home sick (a Pod crashes or a node dies):</strong> The manager spots only 2 badges on the floor, grabs a fresh onboarding packet (<code>spec.template</code>), and hires a brand-new cashier to bring the count back to 3.</li>
+            <li><strong>If an extra person walks in wearing a <code>role=cashier</code> badge:</strong> Now there are 4 cashiers—the manager politely sends one home so the count stays at 3.</li>
+          </ul>
+          <p style="margin-bottom:0;">
+            In short: a <strong>ReplicaSet</strong> guarantees that a specified number of identical Pod replicas are running at any given time.
+          </p>
+        </div>
+
+        <div class="diagram-frame">
+          <div class="diagram-label">
+            <span>DIAGRAM 01 • MENTAL MODEL</span>
+            <span class="hand-tag">Desired State (3) vs Actual State (2) → Scale Up +1</span>
+          </div>
+          <svg viewBox="0 0 800 250" role="img" aria-label="ReplicaSet Shift Manager Mental Model Diagram">
+            <defs>
+              <marker id="arr1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--diagram-stroke)"/>
+              </marker>
+            </defs>
+
+            <!-- ReplicaSet Controller Box -->
+            <rect x="20" y="24" width="255" height="202" rx="6" fill="var(--diag-fill-2)" stroke="var(--diag-stroke-2)" stroke-width="2"/>
+            <text x="36" y="50" class="svg-hand" font-size="18" fill="var(--diag-stroke-2)">ReplicaSet: web-rs</text>
+            <text x="36" y="75" class="svg-mono" font-size="11.5" fill="var(--ink-body)">spec.replicas: 3</text>
+            <text x="36" y="95" class="svg-mono" font-size="11" fill="var(--ink-teal)">selector: app=web</text>
+            <line x1="36" y1="108" x2="256" y2="108" stroke="var(--diag-stroke-2)" stroke-width="1" stroke-dasharray="4,3"/>
+            <text x="36" y="128" class="svg-sans" font-size="11.5" font-weight="600" fill="var(--ink-body)">Clipboard Check:</text>
+            <text x="36" y="148" class="svg-sans" font-size="11.5" fill="var(--ink-body)">• Desired: 3 Pods</text>
+            <text x="36" y="168" class="svg-sans" font-size="11.5" fill="var(--diag-stroke-4)">• Alive now: 2 Pods</text>
+            <text x="36" y="194" class="svg-hand" font-size="15.5" fill="var(--diag-stroke-3)">Action: Create 1 Pod from template!</text>
+
+            <!-- Arrow from RS to New Pod -->
+            <path d="M 275 182 L 542 182" stroke="var(--diag-stroke-3)" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arr1)"/>
+            <text x="408" y="173" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diag-stroke-3)">POST /api/v1/namespaces/.../pods</text>
+
+            <!-- Active Pod 1 -->
+            <rect x="330" y="24" width="190" height="62" rx="5" fill="var(--diag-fill-3)" stroke="var(--diag-stroke-3)" stroke-width="1.6"/>
+            <text x="425" y="48" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-3)">Pod: web-rs-9a2k1</text>
+            <text x="425" y="68" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">Running • label: app=web</text>
+
+            <!-- Active Pod 2 -->
+            <rect x="550" y="24" width="225" height="62" rx="5" fill="var(--diag-fill-3)" stroke="var(--diag-stroke-3)" stroke-width="1.6"/>
+            <text x="662" y="48" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-3)">Pod: web-rs-4x7m8</text>
+            <text x="662" y="68" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">Running • label: app=web</text>
+
+            <!-- Crashed Pod -->
+            <rect x="330" y="100" width="190" height="56" rx="5" fill="var(--diag-fill-4)" stroke="var(--diag-stroke-4)" stroke-width="1.5" stroke-dasharray="4,3"/>
+            <text x="425" y="123" text-anchor="middle" class="svg-hand" font-size="15.5" fill="var(--diag-stroke-4)">Pod: web-rs-1p0z3 (Lost)</text>
+            <text x="425" y="142" text-anchor="middle" class="svg-sans" font-size="10.5" fill="var(--diagram-sub)">Node failed / Pod deleted</text>
+
+            <!-- Newly Created Replacement Pod -->
+            <rect x="550" y="150" width="225" height="76" rx="5" fill="var(--diag-fill-1)" stroke="var(--diag-stroke-1)" stroke-width="2"/>
+            <text x="662" y="175" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-1)">New Pod: web-rs-8q5v2</text>
+            <text x="662" y="195" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">Cloned from spec.template</text>
+            <text x="662" y="213" text-anchor="middle" class="svg-sans" font-size="10.5" fill="var(--ink-teal)">Brings count back to 3/3 ✓</text>
+          </svg>
+        </div>
+      </section>
+
+      <!-- SECTION 2 -->
+      <section class="section-block" id="sec2">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 2. Deep Technical Explanation</h2>
+        <p>
+          A ReplicaSet (<code>apps/v1</code>) is a declarative Kubernetes API resource executed by the <strong>ReplicaSet controller</strong> inside <code>kube-controller-manager</code>. It is built around three core fields:
+        </p>
+
+        <div class="note-card">
+          <ol style="margin-bottom:0;">
+            <li><strong>Desired Replica Count (<code>spec.replicas</code>):</strong> An integer specifying how many matching Pods should exist concurrently (defaults to <code>1</code> if omitted; setting to <code>0</code> scales the workload down without deleting the ReplicaSet definition).</li>
+            <li><strong>Set-Based Label Selector (<code>spec.selector</code>):</strong> Unlike the legacy <code>ReplicationController</code> (which only supported equality-based selectors), ReplicaSets support both <code>matchLabels</code> and rich set-based <code>matchExpressions</code> (<code>In</code>, <code>NotIn</code>, <code>Exists</code>, <code>DoesNotExist</code>). Note: <code>spec.selector</code> is <strong>immutable</strong> after creation.</li>
+            <li><strong>Pod Template (<code>spec.template</code>):</strong> A complete embedded Pod specification (metadata labels + Pod <code>spec</code>) used as a cookie-cutter blueprint whenever the controller needs to mint new Pods. The labels in <code>spec.template.metadata.labels</code> <em>must</em> satisfy <code>spec.selector</code>, or the API server rejects the manifest.</li>
+            <li><strong>Ownership Metadata (<code>metadata.ownerReferences</code>):</strong> When a ReplicaSet creates a Pod, it injects an <code>ownerReference</code> pointing to itself with <code>controller: true</code> and <code>blockOwnerDeletion: true</code>—enabling cascading garbage collection and preventing two ReplicaSets from fighting over the same Pod.</li>
+            <li><strong>Status &amp; Readiness Accounting (<code>status</code>):</strong> Tracks <code>status.replicas</code> (total matching Pods), <code>status.fullyLabeledReplicas</code>, <code>status.readyReplicas</code> (passing <code>readinessProbe</code>), and <code>status.availableReplicas</code> (ready for at least <code>spec.minReadySeconds</code>).</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- SECTION 3 -->
+      <section class="section-block" id="sec3">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 3. Internal Working &amp; Control Loop Perspective</h2>
+        <p>
+          Inside <code>kube-controller-manager</code>, the ReplicaSet controller does not poll the API server blindly. Instead, it runs an event-driven <strong>Informer + Workqueue reconciliation loop</strong>:
+        </p>
+
+        <div class="two-col">
+          <div class="note-card" style="margin-bottom:0;">
+            <h3>SharedInformers &amp; Local Cache</h3>
+            <p style="margin-bottom:0;">
+              The controller watches both <code>ReplicaSet</code> and <code>Pod</code> objects via LIST/WATCH streams from <code>kube-apiserver</code>, maintaining an in-memory indexed store (<code>indexer</code>) so reads don't hammer <code>etcd</code>.
+            </p>
+          </div>
+          <div class="note-card" style="margin-bottom:0;">
+            <h3>Level-Triggered Reconciliation</h3>
+            <p style="margin-bottom:0;">
+              Whenever a Pod is added, updated (e.g., labels changed or <code>deletionTimestamp</code> set), or deleted, the controller resolves its owning ReplicaSet and pushes the RS key (<code>namespace/name</code>) onto a rate-limited workqueue.
+            </p>
+          </div>
+        </div>
+
+        <div class="note-card">
+          <h3>Key Internal Mechanisms</h3>
+          <ul style="margin-bottom:0;">
+            <li><strong>Pod Adoption &amp; Release:</strong> If an unowned (orphan) Pod exists whose labels match <code>spec.selector</code>, the ReplicaSet <em>adopts</em> it by patching its <code>ownerReferences</code>. Conversely, if you remove a matching label from an owned Pod, the ReplicaSet <em>releases</em> (orphans) it and immediately spawns a replacement Pod!</li>
+            <li><strong>Expectations Cache (Anti-Duplicate Guard):</strong> Because API writes are asynchronous, after the controller calls <code>CreatePods</code> for <em>N</em> Pods, it records an "expectation" of +<em>N</em> creations in memory. Until those <em>N</em> Pod creation events arrive via the Watch stream (or time out), the controller pauses further scale-up for that RS so it doesn't accidentally create double replicas.</li>
+            <li><strong>Burst Throttling (<code>SlowStartBatch</code>):</strong> If you scale a ReplicaSet from <code>0</code> to <code>1,000</code>, it creates Pods in exponentially growing batches (<code>1</code>, <code>2</code>, <code>4</code>, <code>8</code>... up to <code>500</code> per burst) so a broken Pod template or invalid image doesn't immediately flood the cluster with 1,000 failing Pods.</li>
+            <li><strong>Scale-Down Selection Priority:</strong> When <code>actual &gt; desired</code>, the controller sorts Pods to delete the least disruptive ones first: (1) Unassigned/Pending Pods before Running Pods, (2) NotReady Pods before Ready Pods, (3) Lower <code>controller.kubernetes.io/pod-deletion-cost</code> annotation values first, and (4) Newer Pods before older Pods.</li>
+          </ul>
+        </div>
+
+        <div class="diagram-frame">
+          <div class="diagram-label">
+            <span>DIAGRAM 02 • CONTROLLER INTERNALS</span>
+            <span class="hand-tag">kube-controller-manager Reconciliation Loop</span>
+          </div>
+          <svg viewBox="0 0 800 260" role="img" aria-label="ReplicaSet Controller Loop Internals Diagram">
+            <defs>
+              <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--diagram-stroke)"/>
+              </marker>
+            </defs>
+
+            <!-- API Server + etcd -->
+            <rect x="20" y="26" width="180" height="205" rx="5" fill="var(--diag-fill-1)" stroke="var(--diag-stroke-1)" stroke-width="1.8"/>
+            <text x="110" y="54" text-anchor="middle" class="svg-hand" font-size="18" fill="var(--diag-stroke-1)">kube-apiserver</text>
+            <text x="110" y="76" text-anchor="middle" class="svg-mono" font-size="11" fill="var(--diagram-sub)">+ etcd store</text>
+            <rect x="36" y="96" width="148" height="44" rx="4" fill="var(--diagram-bg)" stroke="var(--diag-stroke-1)" stroke-width="1"/>
+            <text x="110" y="116" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">ReplicaSet objects</text>
+            <text x="110" y="132" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">Pod objects</text>
+            <text x="110" y="172" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-teal)">WATCH stream (HTTP/2)</text>
+            <text x="110" y="192" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">sends ADD/MOD/DEL</text>
+
+            <!-- Watch Arrow -->
+            <line x1="200" y1="84" x2="258" y2="84" stroke="var(--diagram-stroke)" stroke-width="1.8" marker-end="url(#arr2)"/>
+            <text x="229" y="75" text-anchor="middle" class="svg-mono" font-size="10" fill="var(--diagram-sub)">Watch</text>
+
+            <!-- Informer + Workqueue -->
+            <rect x="262" y="26" width="225" height="96" rx="5" fill="var(--diag-fill-2)" stroke="var(--diag-stroke-2)" stroke-width="1.6"/>
+            <text x="374" y="50" text-anchor="middle" class="svg-hand" font-size="17" fill="var(--diag-stroke-2)">Informer Cache + Queue</text>
+            <text x="374" y="72" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">1. Updates local Indexer cache</text>
+            <text x="374" y="91" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">2. Resolves ownerReference → RS</text>
+            <text x="374" y="110" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-accent)">enqueue("prod/web-rs")</text>
+
+            <!-- Arrow to SyncLoop -->
+            <line x1="487" y1="74" x2="532" y2="74" stroke="var(--diagram-stroke)" stroke-width="1.8" marker-end="url(#arr2)"/>
+
+            <!-- syncReplicaSet Worker -->
+            <rect x="536" y="26" width="244" height="205" rx="5" fill="var(--diag-fill-3)" stroke="var(--diag-stroke-3)" stroke-width="1.8"/>
+            <text x="658" y="52" text-anchor="middle" class="svg-hand" font-size="17" fill="var(--diag-stroke-3)">syncReplicaSet() Worker</text>
+            <text x="658" y="76" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">1. Filter active Pods matching selector</text>
+            <text x="658" y="96" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">2. Adopt orphans / release mismatched</text>
+            <text x="658" y="116" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">3. Check Expectations cache</text>
+            <text x="658" y="138" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diag-stroke-3)">diff = len(pods) - spec.replicas</text>
+            <text x="658" y="160" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">• diff &lt; 0 → SlowStartBatch Create</text>
+            <text x="658" y="179" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">• diff &gt; 0 → Sort &amp; Delete excess</text>
+            <text x="658" y="204" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diagram-sub)">4. Patch RS .status</text>
+
+            <!-- Create/Delete Feedback Arrow -->
+            <path d="M 536 196 L 204 196" stroke="var(--diag-stroke-4)" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#arr2)"/>
+            <text x="370" y="187" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diag-stroke-4)">Create / Delete Pods &amp; Update RS Status</text>
+          </svg>
+        </div>
+      </section>
+
+      <!-- SECTION 4 -->
+      <section class="section-block" id="sec4">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 4. Architecture &amp; Flow</h2>
+        <p>Here is what happens end-to-end when a worker node fails and a ReplicaSet self-heals a lost Pod:</p>
+
+        <div class="note-card">
+          <ol style="margin-bottom:0;">
+            <li><strong>Node heartbeat stops:</strong> A worker node loses power or network connectivity; <code>node-lifecycle-controller</code> marks the node <code>Ready=Unknown</code> after <code>node-monitor-grace-period</code> (default <code>40s</code>).</li>
+            <li><strong>Pod eviction / taint-based termination:</strong> After <code>pod-eviction-timeout</code> / <code>tolerationSeconds</code> (default <code>300s</code>), the taint manager sets a <code>deletionTimestamp</code> on Pods scheduled to that dead node (or if a Pod container crashes and is deleted, its Pod object is removed from <code>etcd</code>).</li>
+            <li><strong>Watch event fires:</strong> <code>kube-apiserver</code> broadcasts the Pod deletion/terminating event to the ReplicaSet controller's informer cache.</li>
+            <li><strong>Diff calculation:</strong> Active Pods matching <code>spec.selector</code> (excluding Pods with a non-nil <code>deletionTimestamp</code>) drops from <code>3</code> to <code>2</code>.</li>
+            <li><strong>Replacement Pod created:</strong> The ReplicaSet controller issues a <code>POST</code> to create a new Pod from <code>spec.template</code> with a fresh generated suffix (e.g., <code>web-rs-8q5v2</code>) and sets its own <code>ownerReferences</code>.</li>
+            <li><strong>Scheduling &amp; startup:</strong> <code>kube-scheduler</code> binds the new Pod to a healthy node, and <code>kubelet</code> starts the containers and marks it <code>Ready</code>.</li>
+          </ol>
+        </div>
+
+        <div class="diagram-frame">
+          <div class="diagram-label">
+            <span>DIAGRAM 03 • SELF-HEALING TIMELINE</span>
+            <span class="hand-tag">How a ReplicaSet recovers from Pod/Node loss</span>
+          </div>
+          <svg viewBox="0 0 800 185" role="img" aria-label="ReplicaSet Self-Healing Flow Diagram">
+            <defs>
+              <marker id="arr3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--diagram-stroke)"/>
+              </marker>
+            </defs>
+
+            <!-- 1 -->
+            <rect x="12" y="20" width="142" height="145" rx="5" fill="var(--diag-fill-4)" stroke="var(--diag-stroke-4)" stroke-width="1.5"/>
+            <text x="83" y="44" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-4)">1. Pod Lost</text>
+            <text x="83" y="68" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Pod deleted or</text>
+            <text x="83" y="86" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Node evicted</text>
+            <text x="83" y="114" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diag-stroke-4)">Active: 2 / 3</text>
+            <text x="83" y="140" text-anchor="middle" class="svg-sans" font-size="10.5" fill="var(--diagram-sub)">Event sent to API</text>
+
+            <line x1="154" y1="92" x2="176" y2="92" stroke="var(--diagram-stroke)" stroke-width="1.8" marker-end="url(#arr3)"/>
+
+            <!-- 2 -->
+            <rect x="180" y="20" width="144" height="145" rx="5" fill="var(--diag-fill-2)" stroke="var(--diag-stroke-2)" stroke-width="1.5"/>
+            <text x="252" y="44" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-2)">2. RS Reconciles</text>
+            <text x="252" y="68" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Informer wakes RS</text>
+            <text x="252" y="88" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Sees deficit (-1)</text>
+            <text x="252" y="114" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-accent)">Reads spec.template</text>
+            <text x="252" y="140" text-anchor="middle" class="svg-sans" font-size="10.5" fill="var(--diagram-sub)">Sets ownerReference</text>
+
+            <line x1="324" y1="92" x2="346" y2="92" stroke="var(--diagram-stroke)" stroke-width="1.8" marker-end="url(#arr3)"/>
+
+            <!-- 3 -->
+            <rect x="350" y="20" width="144" height="145" rx="5" fill="var(--diag-fill-1)" stroke="var(--diag-stroke-1)" stroke-width="1.5"/>
+            <text x="422" y="44" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-1)">3. Pod Created</text>
+            <text x="422" y="68" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">POST /pods</text>
+            <text x="422" y="90" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">New name &amp; UID</text>
+            <text x="422" y="112" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Saved in etcd</text>
+            <text x="422" y="140" text-anchor="middle" class="svg-mono" font-size="10" fill="var(--diagram-sub)">Status: Pending</text>
+
+            <line x1="494" y1="92" x2="516" y2="92" stroke="var(--diagram-stroke)" stroke-width="1.8" marker-end="url(#arr3)"/>
+
+            <!-- 4 -->
+            <rect x="520" y="20" width="130" height="145" rx="5" fill="var(--diagram-bg)" stroke="var(--diag-stroke-1)" stroke-width="1.5"/>
+            <text x="585" y="44" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-1)">4. Scheduled</text>
+            <text x="585" y="70" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Scheduler picks</text>
+            <text x="585" y="88" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">healthy node</text>
+            <text x="585" y="116" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-teal)">kubelet pulls</text>
+            <text x="585" y="136" text-anchor="middle" class="svg-sans" font-size="10.5" fill="var(--diagram-sub)">&amp; starts Pod</text>
+
+            <line x1="650" y1="92" x2="670" y2="92" stroke="var(--diagram-stroke)" stroke-width="1.8" marker-end="url(#arr3)"/>
+
+            <!-- 5 -->
+            <rect x="674" y="20" width="114" height="145" rx="5" fill="var(--diag-fill-3)" stroke="var(--diag-stroke-3)" stroke-width="1.5"/>
+            <text x="731" y="44" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-3)">5. Healed!</text>
+            <text x="731" y="72" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Probe passes</text>
+            <text x="731" y="94" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Added to Service</text>
+            <text x="731" y="126" text-anchor="middle" class="svg-mono" font-size="11" fill="var(--diag-stroke-3)">Ready: 3/3</text>
+          </svg>
+        </div>
+      </section>
+
+      <!-- SECTION 5 -->
+      <section class="section-block" id="sec5">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 5. Real-World Production Examples</h2>
+        <div class="two-col">
+          <div class="note-card" style="margin-bottom:0;">
+            <h3>Backing Engine Behind Deployments</h3>
+            <p style="margin-bottom:0;">
+              Every time you update a container image in a <code>Deployment</code>, Kubernetes creates a <strong>new ReplicaSet</strong> (with a new <code>pod-template-hash</code> label) and gradually scales the new RS up while scaling the old RS down to <code>0</code>—keeping the old RS around for instant rollbacks.
+            </p>
+          </div>
+          <div class="note-card" style="margin-bottom:0;">
+            <h3>Horizontal Pod Autoscaler (HPA) Target</h3>
+            <p style="margin-bottom:0;">
+              When CPU or custom request-per-second metrics spike, HPA modifies <code>spec.replicas</code> on the Deployment/ReplicaSet via the <code>/scale</code> subresource, letting the ReplicaSet controller handle batch creation and anti-affinity spreading across availability zones.
+            </p>
+          </div>
+          <div class="note-card" style="margin-bottom:0;">
+            <h3>Quarantining a Misbehaving Pod</h3>
+            <p style="margin-bottom:0;">
+              During an incident, an on-call engineer can remove the matching label (e.g., <code>kubectl label pod web-rs-xyz app-</code>) to isolate a broken Pod for live memory/heap inspection while the ReplicaSet immediately spawns a healthy replacement to preserve capacity.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 6 -->
+      <section class="section-block" id="sec6">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 6. Command Examples</h2>
+
+        <div class="note-card">
+          <h3>A. Listing ReplicaSets and Replica Counters</h3>
+          <div class="cmd-box">
+            <div class="cmd-bar">
+              <span>bash</span>
+              <button class="copy-btn" type="button" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre>kubectl get rs -n prod -o wide</pre>
+          </div>
+          <ul style="margin-bottom:0;">
+            <li><strong>Output columns:</strong> <code>NAME</code> (e.g., <code>web-api-6d8f9b7c4</code>), <code>DESIRED</code> (<code>spec.replicas</code>), <code>CURRENT</code> (total existing matching Pods), <code>READY</code> (Pods passing <code>readinessProbe</code>), <code>AGE</code>, plus <code>CONTAINERS</code>, <code>IMAGES</code>, and <code>SELECTOR</code> with <code>-o wide</code>.</li>
+            <li><strong>Internally:</strong> Sends a <code>GET</code> request to <code>/apis/apps/v1/namespaces/prod/replicasets</code> and renders <code>.spec.replicas</code> alongside <code>.status.replicas</code> and <code>.status.readyReplicas</code>.</li>
+          </ul>
+        </div>
+
+        <div class="note-card">
+          <h3>B. Inspecting OwnerReferences, Events, and Pod Template</h3>
+          <div class="cmd-box">
+            <div class="cmd-bar">
+              <span>bash</span>
+              <button class="copy-btn" type="button" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre>kubectl describe rs web-api-6d8f9b7c4 -n prod</pre>
+          </div>
+          <ul style="margin-bottom:0;">
+            <li><strong>Internally:</strong> Displays <code>Controlled By: Deployment/web-api</code> (from <code>metadata.ownerReferences</code>), <code>Replicas: 3 current / 3 desired</code>, <code>Pods Status: 3 Running / 0 Waiting / 0 Succeeded / 0 Failed</code>, the full <code>Pod Template</code>, and recent <code>SuccessfulCreate</code> / <code>FailedCreate</code> events.</li>
+          </ul>
+        </div>
+
+        <div class="note-card">
+          <h3>C. Scaling or Deleting a ReplicaSet Without Killing Its Pods (Orphan Mode)</h3>
+          <div class="cmd-box">
+            <div class="cmd-bar">
+              <span>bash</span>
+              <button class="copy-btn" type="button" onclick="copyCode(this)">Copy</button>
+            </div>
+            <pre>kubectl scale rs web-rs --replicas=5 -n prod
+kubectl delete rs web-rs -n prod --cascade=orphan</pre>
+          </div>
+          <ul style="margin-bottom:0;">
+            <li><strong>Flags:</strong> <code>kubectl scale</code> patches the <code>/scale</code> subresource; <code>--cascade=orphan</code> deletes only the ReplicaSet object while leaving its Pods running (stripping their <code>ownerReferences</code>) so another controller can adopt them.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- SECTION 7 -->
+      <section class="section-block" id="sec7">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 7. Common Debugging Scenarios</h2>
+        <div class="note-card">
+          <ul style="margin-bottom:0;">
+            <li><strong><code>DESIRED: 3</code>, <code>CURRENT: 0</code> (No Pods created at all):</strong> Check <code>kubectl describe rs</code> for <code>FailedCreate</code> events—commonly caused by namespace <code>ResourceQuota</code> exhaustion, a restrictive <code>LimitRange</code>, an invalid security context / admission webhook rejection, or a missing <code>ServiceAccount</code>.</li>
+            <li><strong><code>DESIRED: 3</code>, <code>CURRENT: 3</code>, <code>READY: 0</code>:</strong> The ReplicaSet did its job creating the Pods, so stop looking at the RS and inspect the Pods directly (<code>kubectl describe pod</code>)—usually <code>ImagePullBackOff</code>, <code>CrashLoopBackOff</code>, or a failing <code>readinessProbe</code>.</li>
+            <li><strong>Pods constantly terminating &amp; recreating ("Selector Fight"):</strong> Two standalone ReplicaSets (or a manually created Pod) share overlapping <code>spec.selector</code> labels. Both controllers adopt/delete Pods in an infinite tug-of-war. Always include unique labels (like Deployment's automatic <code>pod-template-hash</code>).</li>
+            <li><strong>Updating <code>spec.template</code> image doesn't update existing Pods:</strong> By design! A ReplicaSet only uses <code>spec.template</code> when creating <em>new</em> Pods; it never restarts or mutates already-running Pods in place.</li>
+            <li><strong>Stuck at old replica count during scale-down:</strong> A <code>PodDisruptionBudget</code> (PDB) only blocks <em>voluntary evictions</em> (like <code>kubectl drain</code>)—a ReplicaSet direct <code>DELETE</code> bypasses PDBs, so if scale-down is stuck, check for Pods hung in <code>Terminating</code> due to finalizers or unresponsive PID 1 processes.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- SECTION 8 -->
+      <section class="section-block" id="sec8">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 8. Interview-Focused Explanation</h2>
+        <div class="note-card accent-left">
+          <h3>When asked: "What is the difference between a ReplicaSet and a Deployment?"</h3>
+          <ol style="margin-bottom:0;">
+            <li><strong>Single-version state vs. multi-version orchestration:</strong> A <strong>ReplicaSet</strong> ensures <em>N</em> replicas of <em>one</em> specific Pod template are running. A <strong>Deployment</strong> is a higher-level controller that manages <em>multiple</em> ReplicaSets to perform declarative rolling updates, rollbacks, and canary/blue-green transitions.</li>
+            <li><strong>Template immutability in practice:</strong> Editing a ReplicaSet's Pod template only affects <em>future</em> Pods created after a crash or scale-up—existing Pods keep running the old image. Editing a Deployment's Pod template spawns a brand-new ReplicaSet and safely shifts traffic over.</li>
+            <li><strong>Self-healing &amp; horizontal scaling:</strong> Both support horizontal scaling (<code>spec.replicas</code>) and automatic replacement of failed Pods via label selectors and <code>ownerReferences</code>.</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- SECTION 9 -->
+      <section class="section-block" id="sec9">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 9. Common Misconceptions</h2>
+
+        <div class="myth-row">
+          <p><span class="tag-myth">Myth</span> "A ReplicaSet restarts crashed containers inside an existing Pod."</p>
+          <p style="margin-bottom:0;"><span class="tag-fact">Fact</span> Node-local container restarts (<code>CrashLoopBackOff</code>) are handled by <code>kubelet</code> on that worker node. The ReplicaSet only intervenes at the <em>Pod object</em> level when a Pod is deleted, evicted, or its node disappears.</p>
+        </div>
+
+        <div class="myth-row">
+          <p><span class="tag-myth">Myth</span> "A ReplicaSet only manages Pods that it originally created."</p>
+          <p style="margin-bottom:0;"><span class="tag-fact">Fact</span> A ReplicaSet manages <em>any</em> Pod in the same namespace whose labels match <code>spec.selector</code> and has no other controller <code>ownerReference</code>—meaning it will adopt matching manually-created Pods or kill excess ones.</p>
+        </div>
+
+        <div class="myth-row">
+          <p><span class="tag-myth">Myth</span> "Changing the image in a ReplicaSet's <code>spec.template</code> triggers a rolling update."</p>
+          <p style="margin-bottom:0;"><span class="tag-fact">Fact</span> Existing Pods stay on the old image until they are manually deleted or crash; only newly created Pods use the updated template. Use a <code>Deployment</code> for rolling updates.</p>
+        </div>
+
+        <div class="myth-row">
+          <p><span class="tag-myth">Myth</span> "ReplicaSets give Pods stable network hostnames and persistent storage per replica."</p>
+          <p style="margin-bottom:0;"><span class="tag-fact">Fact</span> ReplicaSet Pods get random 5-character suffixes and ephemeral identities. For ordered, sticky identities (<code>web-0</code>, <code>web-1</code>) and per-replica PVCs, use a <code>StatefulSet</code>.</p>
+        </div>
+      </section>
+
+      <!-- SECTION 10 -->
+      <section class="section-block" id="sec10">
+        <h2 class="hand-heading"><span class="pen-slash"></span> 10. Advanced Concepts Related to ReplicaSets</h2>
+        <div class="note-card">
+          <ul style="margin-bottom:0;">
+            <li><strong><code>pod-template-hash</code> Label Isolation:</strong> When a Deployment creates a ReplicaSet, it computes a FNV-1a hash of <code>spec.template</code> and injects <code>pod-template-hash=&lt;hash&gt;</code> into both the RS's <code>spec.selector</code> and <code>spec.template.metadata.labels</code>—preventing old and new ReplicaSets from colliding on the same Pods.</li>
+            <li><strong>Pod Deletion Cost (<code>controller.kubernetes.io/pod-deletion-cost</code>):</strong> An integer annotation (from <code>-2147483648</code> to <code>2147483647</code>, default <code>0</code>) that lets you influence which Pods a ReplicaSet terminates first during scale-down (e.g., protecting Pods holding active WebSocket connections or warm caches).</li>
+            <li><strong>Topology Spread Constraints &amp; Pod Anti-Affinity:</strong> Combined with ReplicaSets to prevent all <em>N</em> replicas from landing on the same worker node or Availability Zone, eliminating single-node failure risk.</li>
+            <li><strong>Garbage Collection &amp; Finalizers (<code>foregroundDeletion</code> vs <code>orphan</code>):</strong> Deleting a ReplicaSet triggers Kubernetes' garbage collector to follow <code>metadata.ownerReferences</code> and delete child Pods unless <code>--cascade=orphan</code> is specified.</li>
+          </ul>
+        </div>
+
+        <div class="diagram-frame">
+          <div class="diagram-label">
+            <span>DIAGRAM 04 • DEPLOYMENT + REPLICASET RELATIONSHIP</span>
+            <span class="hand-tag">How pod-template-hash isolates old vs new ReplicaSets</span>
+          </div>
+          <svg viewBox="0 0 800 215" role="img" aria-label="Deployment Managing Two ReplicaSets Diagram">
+            <defs>
+              <marker id="arr4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--diagram-stroke)"/>
+              </marker>
+            </defs>
+
+            <!-- Deployment -->
+            <rect x="240" y="14" width="320" height="54" rx="5" fill="var(--diag-fill-1)" stroke="var(--diag-stroke-1)" stroke-width="2"/>
+            <text x="400" y="37" text-anchor="middle" class="svg-hand" font-size="18" fill="var(--diag-stroke-1)">Deployment: web-api (image: v2)</text>
+            <text x="400" y="56" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">Orchestrates rolling update across ReplicaSets</text>
+
+            <!-- Ownership Arrows -->
+            <path d="M 330 68 L 210 102" stroke="var(--diagram-stroke)" stroke-width="1.6" marker-end="url(#arr4)"/>
+            <path d="M 470 68 L 590 102" stroke="var(--diagram-stroke)" stroke-width="1.6" marker-end="url(#arr4)"/>
+
+            <!-- Old RS -->
+            <rect x="35" y="106" width="320" height="94" rx="5" fill="var(--diag-fill-4)" stroke="var(--diag-stroke-4)" stroke-width="1.5" stroke-dasharray="5,3"/>
+            <text x="195" y="129" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-4)">Old RS: web-api-7f8a9 (Scaled to 0)</text>
+            <text x="195" y="149" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">selector: app=web, pod-template-hash=7f8a9</text>
+            <text x="195" y="168" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--diagram-sub)">Retained for instant kubectl rollout undo</text>
+            <text x="195" y="187" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diag-stroke-4)">Active Pods: 0</text>
+
+            <!-- New RS -->
+            <rect x="445" y="106" width="320" height="94" rx="5" fill="var(--diag-fill-3)" stroke="var(--diag-stroke-3)" stroke-width="1.8"/>
+            <text x="605" y="129" text-anchor="middle" class="svg-hand" font-size="16" fill="var(--diag-stroke-3)">New RS: web-api-6d8f9 (Scaled to 3)</text>
+            <text x="605" y="149" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--ink-body)">selector: app=web, pod-template-hash=6d8f9</text>
+            <text x="605" y="168" text-anchor="middle" class="svg-sans" font-size="11" fill="var(--ink-body)">Owns &amp; maintains 3 v2 Pods</text>
+            <text x="605" y="187" text-anchor="middle" class="svg-mono" font-size="10.5" fill="var(--diag-stroke-3)">Active Pods: 3 / 3 Ready ✓</text>
+          </svg>
+        </div>
+      </section>
+
+      <!-- SECTION 11: YOUR TURN -->
+      <section class="section-block" id="sec11" style="margin-bottom:0;">
+        <h2 class="hand-heading"><span class="pen-slash"></span> Your Turn: Interview &amp; Production Check</h2>
+        <p class="section-lead">
+          Answer these in your own words—don't look anything up, and explain the <strong>why</strong> behind your answers:
+        </p>
+
+        <div class="practice-card">
+          <div class="practice-q"><span class="practice-level">1. Beginner:</span> Why does Kubernetes have ReplicaSets if a Pod already has a <code>restartPolicy: Always</code> setting?</div>
+          <textarea class="practice-textarea" placeholder="Jot down your answer here..."></textarea>
+          <button class="reveal-btn" type="button" onclick="toggleAns(this)">Check Key Points</button>
+          <div class="reveal-answer"><code>restartPolicy: Always</code> only tells <code>kubelet</code> to restart crashed containers <em>on the same worker node</em>. If the entire worker node dies, is drained, or the Pod is evicted/deleted, <code>kubelet</code> cannot move or recreate the Pod elsewhere—a <strong>ReplicaSet</strong> runs in the control plane to maintain <em>N</em> replicas across healthy nodes.</div>
+        </div>
+
+        <div class="practice-card">
+          <div class="practice-q"><span class="practice-level">2. Intermediate:</span> You have a healthy ReplicaSet running 3 Pods with label <code>app=checkout</code>. You run <code>kubectl label pod checkout-rs-abc12 app-</code> (removing the label). What happens to both that Pod and the cluster's total Pod count?</div>
+          <textarea class="practice-textarea" placeholder="Jot down your answer here..."></textarea>
+          <button class="reveal-btn" type="button" onclick="toggleAns(this)">Check Key Points</button>
+          <div class="reveal-answer">The ReplicaSet sees that <code>checkout-rs-abc12</code> no longer matches <code>spec.selector</code>, so it <strong>releases (orphans)</strong> the Pod without deleting it (leaving it running for debugging), and immediately <strong>creates 1 new replacement Pod</strong>—so 4 Pods are now running in total (3 managed by the RS + 1 orphaned).</div>
+        </div>
+
+        <div class="practice-card">
+          <div class="practice-q"><span class="practice-level">3. Advanced:</span> Why does a Deployment inject a <code>pod-template-hash</code> label into every ReplicaSet it creates, and what would happen without it?</div>
+          <textarea class="practice-textarea" placeholder="Jot down your answer here..."></textarea>
+          <button class="reveal-btn" type="button" onclick="toggleAns(this)">Check Key Points</button>
+          <div class="reveal-answer">Without <code>pod-template-hash</code>, both the old ReplicaSet (scaling down) and the new ReplicaSet (scaling up) would have identical <code>app=web</code> selectors. Both controllers would match all Pods in the namespace, causing race conditions, miscounted replicas, and random deletion of new v2 Pods by the old v1 ReplicaSet.</div>
+        </div>
+
+        <div class="practice-card">
+          <div class="practice-q"><span class="practice-level">4. Scenario-based Production:</span> You edit a standalone ReplicaSet directly (<code>kubectl edit rs web-rs</code>) and change its container image from <code>nginx:1.25</code> to <code>nginx:1.27</code>. Why do your 3 running Pods still serve <code>nginx:1.25</code>, and when would <code>nginx:1.27</code> actually appear?</div>
+          <textarea class="practice-textarea" placeholder="Jot down your answer here..."></textarea>
+          <button class="reveal-btn" type="button" onclick="toggleAns(this)">Check Key Points</button>
+          <div class="reveal-answer">A ReplicaSet never mutates or restarts existing Pods when <code>spec.template</code> changes; it only checks whether the <em>count</em> of matching Pods equals <code>spec.replicas</code>. <code>nginx:1.27</code> will only appear on <em>newly created</em> Pods (e.g., if you scale up or delete an old Pod so the RS replaces it).</div>
+        </div>
+
+        <div class="practice-card">
+          <div class="practice-q"><span class="practice-level">5. Troubleshooting:</span> <code>kubectl get rs</code> shows <code>DESIRED: 5, CURRENT: 0, READY: 0</code>. List three places you would inspect immediately to find out why zero Pods were created.</div>
+          <textarea class="practice-textarea" placeholder="Jot down your answer here..."></textarea>
+          <button class="reveal-btn" type="button" onclick="toggleAns(this)">Check Key Points</button>
+          <div class="reveal-answer">(1) <code>kubectl describe rs &lt;name&gt;</code> → look under <code>Events</code> for <code>FailedCreate</code> messages; (2) Check namespace <code>ResourceQuota</code> / <code>LimitRange</code> (<code>kubectl get resourcequota</code>) blocking Pod creation; (3) Check admission webhooks, missing <code>ServiceAccount</code>, or <code>spec.replicas: 0</code> overrides.</div>
+        </div>
+
+        <div class="practice-card" style="margin-bottom:0;">
+          <div class="practice-q"><span class="practice-level">6. "What would happen if...":</span> What happens if you run <code>kubectl delete rs web-rs --cascade=orphan</code> and then immediately apply a brand-new ReplicaSet manifest with the exact same <code>spec.selector</code> and <code>spec.replicas: 3</code>?</div>
+          <textarea class="practice-textarea" placeholder="Jot down your answer here..."></textarea>
+          <button class="reveal-btn" type="button" onclick="toggleAns(this)">Check Key Points</button>
+          <div class="reveal-answer"><code>--cascade=orphan</code> leaves the 3 original Pods running with no <code>ownerReferences</code>. When the new ReplicaSet starts, its informer finds those 3 unowned matching Pods, <strong>adopts</strong> them by patching their <code>ownerReferences</code>, sees <code>actual (3) == desired (3)</code>, and creates <strong>zero</strong> new Pods—zero downtime!</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // Generate realistic spiral binding coils down the left spine
+    const spiralGutter = document.getElementById('spiralGutter');
+    for (let i = 0; i < 28; i++) {
+      const unit = document.createElement('div');
+      unit.className = 'coil-unit';
+      unit.innerHTML = '<div class="coil-ring"></div><div class="coil-hole"></div>';
+      spiralGutter.appendChild(unit);
+    }
+
+    // Day / Night Notebook Mode Switcher
+    const themeToggle = document.getElementById('themeToggle');
+    const modeText = document.getElementById('modeText');
+    const modeAction = document.getElementById('modeAction');
+    const root = document.documentElement;
+
+    function applyTheme(theme) {
+      root.setAttribute('data-theme', theme);
+      if (theme === 'night') {
+        modeText.textContent = '🌙 Night Notebook';
+        modeAction.textContent = 'Switch to Day →';
+      } else {
+        modeText.textContent = '☀️ Day Notebook';
+        modeAction.textContent = 'Switch to Night →';
+      }
+      try { localStorage.setItem('field-notes-rs-theme', theme); } catch (e) {}
+    }
+
+    themeToggle.addEventListener('click', () => {
+      const next = root.getAttribute('data-theme') === 'day' ? 'night' : 'day';
+      applyTheme(next);
+    });
+
+    try {
+      const saved = localStorage.getItem('field-notes-rs-theme');
+      if (saved === 'night' || saved === 'day') applyTheme(saved);
+    } catch (e) {}
+
+    // Highlight active sidebar index item on scroll
+    const navLinks = document.querySelectorAll('#indexNav a');
+    const sections = Array.from(navLinks).map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+
+    window.addEventListener('scroll', () => {
+      let currentId = sections[0]?.id;
+      for (const sec of sections) {
+        const rect = sec.getBoundingClientRect();
+        if (rect.top <= 130) currentId = sec.id;
+      }
+      navLinks.forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + currentId);
+      });
+    }, { passive: true });
+
+    // Copy CLI commands
+    function copyCode(btn) {
+      const pre = btn.closest('.cmd-box').querySelector('pre');
+      navigator.clipboard.writeText(pre.textContent).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => btn.textContent = orig, 1400);
+      });
+    }
+
+    // Toggle self-check hints
+    function toggleAns(btn) {
+      const box = btn.nextElementSibling;
+      const shown = box.classList.toggle('show');
+      btn.textContent = shown ? 'Hide Key Points' : 'Check Key Points';
+    }
+  </script>
+</body>
+</html>
